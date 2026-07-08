@@ -1,3 +1,17 @@
+
+function getFinalDestination(service: NonNullable<StaffServicesResponse['trainServices']>[number]) {
+  const destinations = service.currentDestinations || service.destination
+  if (destinations?.length) return destinations.map(d => ({
+    name: d.locationName,
+    via: d.via,
+    crs: d.crs,
+  }))
+
+  const finalLocation = [...service.locations].reverse().find(l => l.crs)
+  return finalLocation
+    ? [{ name: finalLocation.locationName, via: null, crs: finalLocation.crs }]
+    : []
+}
 import LatenessCodes from './LatenessCodes.json'
 import CancellationCodes from './CancellationCodes.json'
 
@@ -107,7 +121,7 @@ class Service implements IMyTrainService {
     let reason = (CancellationCodes as Record<string, string | undefined>)[this._cancelReason!!.value.toString()]
     if (!reason) return null
 
-    if (reason && this._cancelReason!!.stationName) {
+    if (reason && this._cancelReason!!.stationName) {A
       reason += ` near ${this._cancelReason!!.stationName}`
     }
 
@@ -415,12 +429,19 @@ export function processServices(
           })
         })
 
+      // --- Insert divide detection logic here ---
+      const divideAssociations = service.subsequentLocations
+        .flatMap(l => l.associations || [])
+        .filter(a => a.category === AssociationCategory.Divide)
+
+      const divideDestinations = divideAssociations.flatMap(a => getFinalDestination(a.service))
+      // --- End divide logic ---
+
       return new Service({
-        destinations: (service.isCancelled ? service.destination : service.currentDestinations || service.destination).map(d => ({
-          name: d.locationName,
-          via: d.via,
-          crs: d.crs,
-        })),
+        destinations: [
+          ...getFinalDestination(service),
+          ...divideDestinations,
+        ],
         origins: (service.isCancelled ? service.origin : service.currentOrigins || service.origin).map(o => ({
           name: o.locationName,
           via: o.via,
@@ -465,21 +486,10 @@ function processAssociatedService(
   const service = association.service
 
   const stop1 = service.locations[0]
-
-  const ogDests = ogService.currentDestinations || ogService.destination
-  const applicableOgDest = ogDests.find(d => d.tiploc === association.destTiploc)
-
-  const ogOrigins = ogService.currentOrigins || ogService.origin
+  const ogOrigins = ogService.currentOrigins || ogService.origin || []
 
   return new Service({
-    destinations: (applicableOgDest
-      ? [applicableOgDest]
-      : stop1.falseDest || [{ locationName: association.destination, crs: association.destCRS }]
-    ).map(d => ({
-      name: d.locationName,
-      via: 'via' in d ? d.via : null,
-      crs: d.crs,
-    })),
+    destinations: getFinalDestination(service),
     origins: ogOrigins.map(o => ({ name: o.locationName, via: o.via, crs: o.crs })),
 
     cancelled: association.isCancelled,
